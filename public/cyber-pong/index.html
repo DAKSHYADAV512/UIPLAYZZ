@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>Cyber Pong: Overdrive</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body, html { width: 100%; height: 100%; overflow: hidden; background: #0b0f19; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #fff; }
+    canvas { display: block; width: 100%; height: 100%; }
+    #hud {
+      position: absolute; top: 16px; left: 0; right: 0;
+      display: flex; justify-content: center; gap: 48px;
+      pointer-events: none; z-index: 10;
+    }
+    .score-card {
+      background: rgba(15, 23, 42, 0.8); border: 1px solid rgba(139, 92, 246, 0.4);
+      border-radius: 12px; padding: 8px 24px; text-align: center;
+      box-shadow: 0 0 15px rgba(99, 102, 241, 0.3); backdrop-filter: blur(8px);
+    }
+    .score-label { font-size: 11px; text-transform: uppercase; color: #94a3b8; letter-spacing: 1.5px; }
+    .score-num { font-size: 28px; font-weight: 900; color: #38bdf8; text-shadow: 0 0 12px #38bdf8; }
+    .score-ai { color: #f43f5e; text-shadow: 0 0 12px #f43f5e; }
+    #overlay {
+      position: absolute; inset: 0; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; background: rgba(11, 15, 25, 0.88);
+      backdrop-filter: blur(8px); z-index: 20; text-align: center; padding: 20px;
+    }
+    h1 { font-size: 32px; font-weight: 900; margin-bottom: 8px; background: linear-gradient(135deg, #06b6d4, #a855f7); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    p { color: #94a3b8; font-size: 14px; margin-bottom: 24px; max-width: 360px; line-height: 1.5; }
+    .btn {
+      background: linear-gradient(135deg, #06b6d4, #8b5cf6); color: white; border: none;
+      padding: 12px 36px; font-size: 16px; font-weight: 700; border-radius: 9999px;
+      cursor: pointer; box-shadow: 0 0 20px rgba(6, 182, 212, 0.5); transition: transform 0.15s;
+    }
+    .btn:hover { transform: scale(1.05); }
+    .hint { margin-top: 16px; font-size: 12px; color: #64748b; }
+  </style>
+</head>
+<body>
+  <div id="hud">
+    <div class="score-card">
+      <div class="score-label">PLAYER</div>
+      <div id="player-score" class="score-num">0</div>
+    </div>
+    <div class="score-card">
+      <div class="score-label">CYBER AI</div>
+      <div id="ai-score" class="score-num score-ai">0</div>
+    </div>
+  </div>
+
+  <div id="overlay">
+    <h1 id="title">CYBER PONG</h1>
+    <p id="desc">High-speed kinetic duel in a neon cyber arena. First to 7 points takes the championship!</p>
+    <button class="btn" id="start-btn">START MATCH</button>
+    <div class="hint">Controls: Mouse / Touch to Move Paddle • Arrow Up/Down or W/S</div>
+  </div>
+
+  <canvas id="canvas"></canvas>
+
+  <script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const pScoreEl = document.getElementById('player-score');
+    const aiScoreEl = document.getElementById('ai-score');
+    const overlay = document.getElementById('overlay');
+    const startBtn = document.getElementById('start-btn');
+    const titleEl = document.getElementById('title');
+    const descEl = document.getElementById('desc');
+
+    let width, height;
+    function resize() {
+      width = canvas.width = window.innerWidth;
+      height = canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    let state = 'menu';
+    let pScore = 0;
+    let aiScore = 0;
+    let soundOn = true;
+
+    const paddleH = 100;
+    const paddleW = 14;
+
+    const player = { x: 30, y: height / 2 - 50, vy: 0 };
+    const ai = { x: width - 44, y: height / 2 - 50, speed: 5.5 };
+    const ball = { x: width / 2, y: height / 2, vx: 6, vy: 3, radius: 9, trail: [] };
+    let particles = [];
+
+    let audioCtx = null;
+    function beep(freq, duration = 0.08) {
+      if (!soundOn) return;
+      try {
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        if (audioCtx.state === 'suspended') audioCtx.resume();
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+        gain.gain.setValueAtTime(0.08, audioCtx.currentTime);
+        gain.gain.linearRampToValueAtTime(0.001, audioCtx.currentTime + duration);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + duration);
+      } catch (e) {}
+    }
+
+    window.addEventListener('message', e => {
+      if (e.data && e.data.type === 'UNIPLAYZZ_TOGGLE_SOUND') soundOn = e.data.enabled;
+    });
+
+    // Controls
+    let mouseY = height / 2;
+    window.addEventListener('mousemove', e => mouseY = e.clientY);
+    window.addEventListener('touchmove', e => {
+      if (e.touches[0]) mouseY = e.touches[0].clientY;
+    });
+
+    const keys = {};
+    window.addEventListener('keydown', e => keys[e.code] = true);
+    window.addEventListener('keyup', e => keys[e.code] = false);
+
+    function resetBall(direction = 1) {
+      ball.x = width / 2;
+      ball.y = height / 2;
+      const speed = 7;
+      const angle = (Math.random() - 0.5) * (Math.PI / 3);
+      ball.vx = Math.cos(angle) * speed * direction;
+      ball.vy = Math.sin(angle) * speed;
+      ball.trail = [];
+    }
+
+    function startGame() {
+      state = 'playing';
+      pScore = 0;
+      aiScore = 0;
+      pScoreEl.innerText = '0';
+      aiScoreEl.innerText = '0';
+      overlay.style.display = 'none';
+      resetBall(Math.random() > 0.5 ? 1 : -1);
+      beep(550, 0.1);
+    }
+    startBtn.addEventListener('click', startGame);
+
+    function finishMatch(playerWon) {
+      state = 'over';
+      titleEl.innerText = playerWon ? 'VICTORY!' : 'AI OVERDRIVE';
+      descEl.innerHTML = playerWon
+        ? `You dominated Cyber AI with a score of ${pScore} - ${aiScore}!`
+        : `AI won ${aiScore} - ${pScore}. Train your reflexes and retaliate!`;
+      startBtn.innerText = 'REMATCH';
+      overlay.style.display = 'flex';
+
+      const finalScore = pScore * 1000 - aiScore * 200;
+      try {
+        window.parent.postMessage({
+          type: 'UNIPLAYZZ_SCORE',
+          score: Math.max(100, finalScore),
+          gameSlug: 'cyber-pong'
+        }, '*');
+      } catch(e) {}
+    }
+
+    function addSparks(x, y, color = '#38bdf8') {
+      for (let i = 0; i < 12; i++) {
+        const a = Math.random() * Math.PI * 2;
+        const spd = Math.random() * 5 + 1;
+        particles.push({
+          x, y,
+          vx: Math.cos(a) * spd,
+          vy: Math.sin(a) * spd,
+          color,
+          life: 1
+        });
+      }
+    }
+
+    function update() {
+      if (state !== 'playing') return;
+
+      // Player move
+      if (keys['KeyW'] || keys['ArrowUp']) mouseY -= 9;
+      if (keys['KeyS'] || keys['ArrowDown']) mouseY += 9;
+      player.y += (mouseY - (player.y + paddleH / 2)) * 0.2;
+      player.y = Math.max(10, Math.min(height - paddleH - 10, player.y));
+
+      // AI move
+      const targetAI = ball.y - paddleH / 2;
+      ai.y += (targetAI - ai.y) * 0.085;
+      ai.y = Math.max(10, Math.min(height - paddleH - 10, ai.y));
+      ai.x = width - 44;
+
+      // Ball move
+      ball.x += ball.vx;
+      ball.y += ball.vy;
+
+      ball.trail.push({ x: ball.x, y: ball.y });
+      if (ball.trail.length > 8) ball.trail.shift();
+
+      // Top / bottom bounce
+      if (ball.y - ball.radius <= 0) {
+        ball.y = ball.radius;
+        ball.vy = -ball.vy;
+        beep(300);
+      } else if (ball.y + ball.radius >= height) {
+        ball.y = height - ball.radius;
+        ball.vy = -ball.vy;
+        beep(300);
+      }
+
+      // Player paddle collision
+      if (
+        ball.x - ball.radius <= player.x + paddleW &&
+        ball.x + ball.radius >= player.x &&
+        ball.y >= player.y &&
+        ball.y <= player.y + paddleH
+      ) {
+        const hitOffset = (ball.y - (player.y + paddleH / 2)) / (paddleH / 2);
+        ball.vx = Math.abs(ball.vx) * 1.05; // speed up
+        ball.vy = hitOffset * 7;
+        ball.x = player.x + paddleW + ball.radius;
+        addSparks(ball.x, ball.y, '#38bdf8');
+        beep(480);
+      }
+
+      // AI paddle collision
+      if (
+        ball.x + ball.radius >= ai.x &&
+        ball.x - ball.radius <= ai.x + paddleW &&
+        ball.y >= ai.y &&
+        ball.y <= ai.y + paddleH
+      ) {
+        const hitOffset = (ball.y - (ai.y + paddleH / 2)) / (paddleH / 2);
+        ball.vx = -Math.abs(ball.vx) * 1.05;
+        ball.vy = hitOffset * 7;
+        ball.x = ai.x - ball.radius;
+        addSparks(ball.x, ball.y, '#f43f5e');
+        beep(380);
+      }
+
+      // Score checks
+      if (ball.x < 0) {
+        aiScore++;
+        aiScoreEl.innerText = aiScore;
+        beep(220, 0.2);
+        if (aiScore >= 7) return finishMatch(false);
+        resetBall(1);
+      } else if (ball.x > width) {
+        pScore++;
+        pScoreEl.innerText = pScore;
+        beep(720, 0.2);
+        if (pScore >= 7) return finishMatch(true);
+        resetBall(-1);
+      }
+
+      // Particles
+      for (let i = particles.length - 1; i >= 0; i--) {
+        const p = particles[i];
+        p.x += p.vx;
+        p.y += p.vy;
+        p.life -= 0.04;
+        if (p.life <= 0) particles.splice(i, 1);
+      }
+    }
+
+    function render() {
+      ctx.fillStyle = '#0b0f19';
+      ctx.fillRect(0, 0, width, height);
+
+      // Arena center line
+      ctx.strokeStyle = 'rgba(139, 92, 246, 0.2)';
+      ctx.lineWidth = 3;
+      ctx.setLineDash([12, 12]);
+      ctx.beginPath();
+      ctx.moveTo(width / 2, 0);
+      ctx.lineTo(width / 2, height);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // Center ring
+      ctx.strokeStyle = 'rgba(56, 189, 248, 0.15)';
+      ctx.beginPath();
+      ctx.arc(width / 2, height / 2, 80, 0, Math.PI * 2);
+      ctx.stroke();
+
+      // Ball Trail
+      for (let i = 0; i < ball.trail.length; i++) {
+        const t = ball.trail[i];
+        const a = (i / ball.trail.length) * 0.4;
+        ctx.fillStyle = `rgba(56, 189, 248, ${a})`;
+        ctx.beginPath();
+        ctx.arc(t.x, t.y, ball.radius * (i / ball.trail.length), 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // Ball
+      ctx.save();
+      ctx.fillStyle = '#38bdf8';
+      ctx.shadowColor = '#38bdf8';
+      ctx.shadowBlur = 16;
+      ctx.beginPath();
+      ctx.arc(ball.x, ball.y, ball.radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+
+      // Player Paddle
+      ctx.save();
+      ctx.fillStyle = '#38bdf8';
+      ctx.shadowColor = '#38bdf8';
+      ctx.shadowBlur = 18;
+      ctx.beginPath();
+      ctx.roundRect(player.x, player.y, paddleW, paddleH, 7);
+      ctx.fill();
+      ctx.restore();
+
+      // AI Paddle
+      ctx.save();
+      ctx.fillStyle = '#f43f5e';
+      ctx.shadowColor = '#f43f5e';
+      ctx.shadowBlur = 18;
+      ctx.beginPath();
+      ctx.roundRect(ai.x, ai.y, paddleW, paddleH, 7);
+      ctx.fill();
+      ctx.restore();
+
+      // Sparks
+      for (const p of particles) {
+        ctx.fillStyle = p.color;
+        ctx.globalAlpha = Math.max(0, p.life);
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 2.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+
+      requestAnimationFrame(render);
+    }
+
+    setInterval(update, 1000 / 60);
+    render();
+  </script>
+</body>
+</html>

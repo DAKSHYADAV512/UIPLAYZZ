@@ -1,0 +1,6 @@
+{
+  "name": "UNIPLAYZZ",
+  "description": "Browser gaming platform to discover, play, and share web games directly in your browser.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
